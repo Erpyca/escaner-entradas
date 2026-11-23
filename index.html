@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <meta name="referrer" content="no-referrer">
+  <title>Escáner</title>
+  <style>
+    body { margin: 0; background: #111; color: #fff; font-family: Arial, sans-serif; text-align: center; }
+    video { display: block; width: 100%; height: 75vh; object-fit: cover; background: #000; }
+    #aviso { font-size: 22px; padding: 18px; }
+    button { width: 90%; padding: 20px; border: 0; border-radius: 14px; font-size: 24px; font-weight: bold; }
+    [hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <video id="video" playsinline muted></video>
+  <div id="aviso"></div>
+  <button id="reintentar" hidden>Abrir la cámara</button>
+  <script src="jsQR.js"></script>
+  <script>
+    // La pantalla de control llega después del "#". Solo se aceptan entradas que apunten a ella.
+    var control = location.hash.slice(1);
+    var controlValido = /^https:\/\/script\.google\.com\/[\w.\/-]+\/exec$/.test(control);
+
+    var video = document.getElementById('video');
+    var reintentar = document.getElementById('reintentar');
+    var lienzo = document.createElement('canvas');
+    var ctx = lienzo.getContext('2d', { willReadFrequently: true });
+    var flujo = null;
+    var abierta = 0;
+
+    // Al volver, el celular suele seguir apuntando a la entrada recién leída: se la saltea un momento.
+    var ESPERA_MISMA_ENTRADA_MS = 4000;
+
+    function avisar(texto) { document.getElementById('aviso').textContent = texto; }
+
+    function leerQr() {
+      if (!video.videoWidth) return null;
+      var escala = Math.min(1, 800 / Math.max(video.videoWidth, video.videoHeight));
+      lienzo.width = Math.round(video.videoWidth * escala);
+      lienzo.height = Math.round(video.videoHeight * escala);
+      ctx.drawImage(video, 0, 0, lienzo.width, lienzo.height);
+      var qr = jsQR(ctx.getImageData(0, 0, lienzo.width, lienzo.height).data, lienzo.width, lienzo.height);
+      return qr && qr.data;
+    }
+
+    function codigoDeEntrada(texto) {
+      var prefijo = control + '?codigo=';
+      var codigo = texto.indexOf(prefijo) === 0 ? texto.slice(prefijo.length) : '';
+      return /^[A-Z0-9]{8}$/.test(codigo) ? codigo : null;
+    }
+
+    function cerrarCamara() {
+      if (flujo) flujo.getTracks().forEach(function (t) { t.stop(); });
+      flujo = null;
+    }
+
+    function mirar() {
+      if (!flujo) return;
+      var texto = leerQr();
+      var codigo = texto && codigoDeEntrada(texto);
+      var recienLeida = codigo && codigo === sessionStorage.getItem('ultima') &&
+        Date.now() - abierta < ESPERA_MISMA_ENTRADA_MS;
+      if (codigo && !recienLeida) {
+        sessionStorage.setItem('ultima', codigo);
+        cerrarCamara();
+        avisar('Abriendo ' + codigo + '…');
+        location.assign(control + '?codigo=' + codigo);
+        return;
+      }
+      if (recienLeida) avisar('Apuntá a la próxima entrada');
+      else if (texto) avisar('Ese QR no es una entrada de esta función');
+      setTimeout(mirar, 120);
+    }
+
+    async function abrirCamara() {
+      cerrarCamara();
+      reintentar.hidden = true;
+      avisar('Abriendo la cámara…');
+      try {
+        flujo = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        video.srcObject = flujo;
+        await video.play();
+        abierta = Date.now();
+        avisar('Apuntá al QR de la entrada');
+        mirar();
+      } catch (e) {
+        cerrarCamara();
+        avisar('No se pudo abrir la cámara. Permití su uso en este sitio y volvé a intentar.');
+        reintentar.hidden = false;
+      }
+    }
+
+    reintentar.onclick = abrirCamara;
+    if (controlValido) {
+      // "pageshow" también se dispara al volver atrás, cuando la cámara quedó cerrada.
+      window.addEventListener('pageshow', abrirCamara);
+      window.addEventListener('pagehide', cerrarCamara);
+    } else {
+      video.hidden = true;
+      avisar('Abrí el escáner desde la pantalla de control de entradas.');
+    }
+  </script>
+</body>
+</html>
